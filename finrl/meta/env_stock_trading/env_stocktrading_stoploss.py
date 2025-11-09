@@ -9,6 +9,7 @@ import matplotlib
 import numpy as np
 import pandas as pd
 from gymnasium import spaces
+from gymnasium.utils import seeding
 from stable_baselines3.common import logger
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.vec_env import SubprocVecEnv
@@ -104,7 +105,7 @@ class StockTradingEnvStopLoss(gym.Env):
         self.state_space = (
             1 + len(self.assets) + len(self.assets) * len(self.daily_information_cols)
         )
-        self.action_space = spaces.Box(low=-1, high=1, shape=(len(self.assets),))
+        self.action_space = spaces.Box(low=-1, high=1, shape=(len(self.assets),), )
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(self.state_space,)
         )
@@ -123,9 +124,8 @@ class StockTradingEnvStopLoss(gym.Env):
             print("data cached!")
 
     def seed(self, seed=None):
-        if seed is None:
-            seed = int(round(time.time() * 1000))
-        random.seed(seed)
+        self.np_random, seed = seeding.np_random(seed)
+        return [seed]
 
     @property
     def current_step(self):
@@ -167,7 +167,9 @@ class StockTradingEnvStopLoss(gym.Env):
             + self.get_date_vector(self.date_index)
         )
         self.state_memory.append(init_state)
-        return init_state
+        info = {}  # can store metadata like starting date or episode id
+        return init_state, info
+
 
     def get_date_vector(self, date, cols=None):
         if (cols is None) and (self.cached_data is not None):
@@ -218,7 +220,10 @@ class StockTradingEnvStopLoss(gym.Env):
             self.account_information["cash"][-1]
             / self.account_information["total_assets"][-1],
         )
-        return state, reward, True, {}
+        terminated = True
+        truncated = False
+        info = {"reason": reason}
+        return state, reward, terminated, truncated, info
 
     def log_step(self, reason, terminal_reward=None):
         if terminal_reward is None:
@@ -295,6 +300,11 @@ class StockTradingEnvStopLoss(gym.Env):
             return reward
 
     def step(self, actions):
+        # Convert everything to np.float64 to prevent sequence math
+        actions = np.asarray(actions, dtype=np.float64).flatten()
+        holdings = np.asarray(self.state_memory[-1][1 : len(self.assets) + 1], dtype=np.float64)
+        closings = np.asarray(self.get_date_vector(self.date_index, cols=["close"]), dtype=np.float64)
+
         # let's just log what we're doing in terms of max actions at each step.
         self.sum_trades += np.sum(np.abs(actions))
         # print header only first time
@@ -310,9 +320,9 @@ class StockTradingEnvStopLoss(gym.Env):
         else:
             # compute value of cash + assets
             begin_cash = self.state_memory[-1][0]
-            holdings = self.state_memory[-1][1 : len(self.assets) + 1]
+            holdings = np.array(self.state_memory[-1][1 : len(self.assets) + 1], dtype=float)
             assert min(holdings) >= 0
-            closings = np.array(self.get_date_vector(self.date_index, cols=["close"]))
+            closings = np.array(self.get_date_vector(self.date_index, cols=["close"]), dtype=float)
             asset_value = np.dot(holdings, closings)
             # reward is (cash + assets) - (cash_last_step + assets_last_step)
             reward = self.get_reward()
@@ -329,6 +339,7 @@ class StockTradingEnvStopLoss(gym.Env):
             )  # capture what the model's trying to do
             # buy/sell only if the price is > 0 (no missing data in this particular date)
             actions = np.where(closings > 0, actions, 0)
+            actions = np.array(actions, dtype=float)
             if self.turbulence_threshold is not None:
                 # if turbulence goes over threshold, just clear out all positions
                 if self.turbulence >= self.turbulence_threshold:
@@ -366,13 +377,13 @@ class StockTradingEnvStopLoss(gym.Env):
 
             # compute our proceeds from sells, and add to cash
             sells = -np.clip(actions, -np.inf, 0)
-            proceeds = np.dot(sells, closings)
-            costs = proceeds * self.sell_cost_pct
+            proceeds = float(np.dot(sells, closings))
+            costs = proceeds * float(self.sell_cost_pct)
             coh = begin_cash + proceeds
             # compute the cost of our buys
             buys = np.clip(actions, 0, np.inf)
-            spend = np.dot(buys, closings)
-            costs += spend * self.buy_cost_pct
+            spend = float(np.dot(buys, closings))
+            costs += spend * float(self.buy_cost_pct)
             # if we run out of cash...
             if (spend + costs) > coh:
                 if self.patient:
@@ -383,9 +394,10 @@ class StockTradingEnvStopLoss(gym.Env):
                     costs = 0
                 else:
                     # ... end the cycle and penalize
-                    return self.return_terminal(
+                    state, reward, terminated, truncated, info = self.return_terminal(
                         reason="CASH SHORTAGE", reward=self.get_reward()
                     )
+                    return state, reward, False, True, info   # truncated=True
 
             self.transaction_memory.append(actions)  # capture what the model's could do
 
@@ -444,7 +456,7 @@ class StockTradingEnvStopLoss(gym.Env):
             )
             self.state_memory.append(state)
 
-            return state, reward, False, {}
+            return state, reward, False, False, {}
 
     def get_sb_env(self):
         def get_self():
