@@ -300,6 +300,11 @@ class StockTradingEnvStopLoss(gym.Env):
             return reward
 
     def step(self, actions):
+        # Convert everything to np.float64 to prevent sequence math
+        actions = np.asarray(actions, dtype=np.float64).flatten()
+        holdings = np.asarray(self.state_memory[-1][1 : len(self.assets) + 1], dtype=np.float64)
+        closings = np.asarray(self.get_date_vector(self.date_index, cols=["close"]), dtype=np.float64)
+
         # let's just log what we're doing in terms of max actions at each step.
         self.sum_trades += np.sum(np.abs(actions))
         # print header only first time
@@ -315,9 +320,9 @@ class StockTradingEnvStopLoss(gym.Env):
         else:
             # compute value of cash + assets
             begin_cash = self.state_memory[-1][0]
-            holdings = self.state_memory[-1][1 : len(self.assets) + 1]
+            holdings = np.array(self.state_memory[-1][1 : len(self.assets) + 1], dtype=float)
             assert min(holdings) >= 0
-            closings = np.array(self.get_date_vector(self.date_index, cols=["close"]))
+            closings = np.array(self.get_date_vector(self.date_index, cols=["close"]), dtype=float)
             asset_value = np.dot(holdings, closings)
             # reward is (cash + assets) - (cash_last_step + assets_last_step)
             reward = self.get_reward()
@@ -334,6 +339,7 @@ class StockTradingEnvStopLoss(gym.Env):
             )  # capture what the model's trying to do
             # buy/sell only if the price is > 0 (no missing data in this particular date)
             actions = np.where(closings > 0, actions, 0)
+            actions = np.array(actions, dtype=float)
             if self.turbulence_threshold is not None:
                 # if turbulence goes over threshold, just clear out all positions
                 if self.turbulence >= self.turbulence_threshold:
@@ -371,13 +377,13 @@ class StockTradingEnvStopLoss(gym.Env):
 
             # compute our proceeds from sells, and add to cash
             sells = -np.clip(actions, -np.inf, 0)
-            proceeds = np.dot(sells, closings)
-            costs = proceeds * self.sell_cost_pct
+            proceeds = float(np.dot(sells, closings))
+            costs = proceeds * float(self.sell_cost_pct)
             coh = begin_cash + proceeds
             # compute the cost of our buys
             buys = np.clip(actions, 0, np.inf)
-            spend = np.dot(buys, closings)
-            costs += spend * self.buy_cost_pct
+            spend = float(np.dot(buys, closings))
+            costs += spend * float(self.buy_cost_pct)
             # if we run out of cash...
             if (spend + costs) > coh:
                 if self.patient:
