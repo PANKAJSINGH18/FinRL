@@ -77,7 +77,7 @@ class StockTradingEnvStopLoss(gym.Env):
         self.min_profit_penalty = 1 + profit_loss_ratio * (1 - self.stoploss_penalty)
         self.turbulence_threshold = turbulence_threshold
         self.daily_information_cols = daily_information_cols
-        self.cash_penalty_proportion = cash_penperty_proportion
+        self.cash_penalty_proportion = cash_penalty_proportion
         
         # ===== CRITICAL OPTIMIZATION: Convert DataFrame to numpy =====
         self._precompute_all_data(df, date_col_name)
