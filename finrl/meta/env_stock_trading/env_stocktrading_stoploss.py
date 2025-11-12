@@ -28,7 +28,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class StockTradingEnvStopLossOptimized(gym.Env):
+class StockTradingEnvStopLoss(gym.Env):
     """
     HEAVILY OPTIMIZED VERSION:
     - Zero pandas operations during step()
